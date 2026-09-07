@@ -1,5 +1,9 @@
-bin/
-obj/
+**/bin/
+**/obj/
 .vs/
 .idea/
 artifacts
+Jellyfin.Plugin.OptimalVersions.deps.json
+Jellyfin.Plugin.OptimalVersions.xml
+Jellyfin.Plugin.OptimalVersions.pdb
+Jellyfin.Plugin.OptimalVersions.dll

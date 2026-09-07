@@ -40,6 +40,8 @@ All Jellyfin links in this table are pinned to commit `4910aafa1a8227a65a037d3d2
 | [`MediaBrowser.Model/Dlna/StreamBuilder.cs`, `GetVideoDirectPlayProfile()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/MediaBrowser.Model/Dlna/StreamBuilder.cs#L1278-L1418) | Evaluates direct-play profiles and their codec/profile/level/resolution/range and related conditions, returning a play method and reason flags. |
 | [`MediaBrowser.Controller/Plugins/IPluginServiceRegistrator.cs`, `RegisterServices()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/MediaBrowser.Controller/Plugins/IPluginServiceRegistrator.cs#L1-L19) | Public plugin extension contract for adding services before the container is built. |
 | [`Emby.Server.Implementations/Plugins/PluginManager.cs`, `RegisterServices()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/Emby.Server.Implementations/Plugins/PluginManager.cs#L193-L239) | Discovers parameterless plugin registrators, checks plugin state/support, creates them, and invokes service registration. |
+| [`Emby.Server.Implementations/Plugins/PluginManager.cs`, `CreatePluginInstance()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/Emby.Server.Implementations/Plugins/PluginManager.cs#L549-L616) | Creates the main plugin through `ActivatorUtilities`, then reads initialized `Version`, ID, name, description, and assembly path while attaching or creating its plugin record. |
+| [`MediaBrowser.Common/Plugins/BasePluginOfT.cs`, `BasePlugin<TConfiguration>` constructor](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/MediaBrowser.Common/Plugins/BasePluginOfT.cs#L35-L65) | Receives `IApplicationPaths` and `IXmlSerializer`, derives assembly/data paths and version from the loaded assembly, and calls `SetAttributes()`. Plain non-generic `BasePlugin` has no equivalent constructor initialization. |
 | [`Emby.Server.Implementations/ApplicationHost.cs`, `Init()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/Emby.Server.Implementations/ApplicationHost.cs#L461-L493) | Discovers types, registers server services, then invokes plugin service registration. |
 | [`Jellyfin.Server/Program.cs`, `StartServer()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/Jellyfin.Server/Program.cs#L159-L196) | Calls `appHost.Init(services)` during host service configuration and only then builds the host. |
 | [`Jellyfin.Server/Startup.cs`, `Configure()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/Jellyfin.Server/Startup.cs#L160-L257) | Defines Jellyfin's middleware order inside its base-URL branch, including response compression before routing/endpoints. |
@@ -191,7 +193,18 @@ This iteration implements only the experiment needed to prove that a plugin can 
 4. The filter logs original position, source ID, dimensions, video codec, bitrate, all three support flags, and the non-serialized `TranscodeReasons`. Playback and transcode URLs are never logged.
 5. Automated tests cover query-only and body-only IDs, query precedence, matching/nonmatching/blank IDs, preservation of nested body data, non-PlaybackInfo scoping, result-filter scoping, correlation, and unchanged source order.
 
-No implementation finding differed from the pinned upstream behavior documented above. A real RC7/Moonfin run is still required to prove that the server loads the startup filter and global MVC filter in the deployed plugin environment and that unpinning returns multiple evaluated versions.
+### Live RC7/Moonfin validation
+
+A live Moonfin playback against Jellyfin 12 RC7 on 2026-09-06 confirmed the complete experiment with one correlation ID:
+
+- Jellyfin loaded plugin version 0.1.0.2 and invoked both the registered `IStartupFilter` and its middleware configurator.
+- Moonfin supplied the route item GUID as `MediaSourceId` in both the query and body, confirming the source-level serialization finding against the running client.
+- The middleware identified the request as an implicit/default pin and removed both values before MVC binding.
+- Jellyfin returned two evaluated sources, and the globally registered MVC result filter received the typed `PlaybackInfoResponse` before serialization.
+- The original source remained first, confirming that unpinning alone does not change Jellyfin's preferred order.
+- Both HEVC 3840×1606 and H.264 1918×802 sources reported Direct Play, Direct Stream, and Transcoding support with `TranscodeReasons=None` (`0`). This is consistent with the RC7 finding that Direct Stream mirrors Direct Play in this path and that `SupportsTranscoding` represents availability rather than the chosen play method.
+
+This runtime evidence confirms the supported plugin registration and request/result interception architecture. It does not yet demonstrate a visible media-version switch because response ordering remains intentionally unchanged and both observed sources occupy the same Direct Play capability tier.
 
 ## Proposed iteration after the live experiment
 
@@ -230,6 +243,7 @@ Only after the correlated live logs prove the experiment should the filter begin
 This review uses the upstream findings above as its premise; successful compilation is only a compatibility check, not architectural evidence.
 
 - `Jellyfin.Plugin.OptimalVersions.csproj` matches the inspected RC7 server: `net10.0`, `Jellyfin.Controller` and `Jellyfin.Model` `12.0.0-rc7`, a framework reference to `Microsoft.AspNetCore.App`, and no bundled Jellyfin runtime assemblies.
+- `Plugin` derives from `BasePlugin<PluginConfiguration>` and uses RC7's standard `IApplicationPaths`/`IXmlSerializer` constructor. This is necessary even though the prototype exposes no configuration UI: deriving directly from plain `BasePlugin` leaves its version and paths uninitialized and can make `PluginManager.CreatePluginInstance()` throw when it reads `instance.Version`.
 - `PluginServiceRegistrator` registers `IStartupFilter`, the result filter, and its global `MvcOptions` filter entry; this matches the verified pre-container plugin registration lifecycle and uses only public ASP.NET Core/Jellyfin contracts.
 - `PlaybackInfoStartupFilter` adds the request rewriter before calling the supplied `next` configurator, so it wraps Jellyfin's pipeline as documented.
 - `PlaybackInfoRequestClassifier` accepts the optional base-URL prefix, restricts observation to POST PlaybackInfo paths, parses the route item as a GUID, and compares source IDs as GUIDs. Its query-present/body-fallback model matches `GetPostedPlaybackInfo()`'s null-based precedence, including the empty-query edge case.

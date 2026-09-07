@@ -64,7 +64,11 @@ public sealed class PlaybackInfoLoggingMiddleware
                     true,
                     null))
             {
-                LogUnchangedRequest(itemId, effectiveMediaSourceId);
+                LogUnchangedRequest(
+                    itemId,
+                    effectiveMediaSourceId,
+                    queryMediaSourceIdIsPresent: true,
+                    bodyMediaSourceId: null);
                 await _next(context).ConfigureAwait(false);
                 return;
             }
@@ -85,7 +89,11 @@ public sealed class PlaybackInfoLoggingMiddleware
                 queryMediaSourceIdIsPresent,
                 body.MediaSourceId))
         {
-            LogUnchangedRequest(itemId, effectiveMediaSourceId);
+            LogUnchangedRequest(
+                itemId,
+                effectiveMediaSourceId,
+                queryMediaSourceIdIsPresent,
+                body.MediaSourceId);
             await _next(context).ConfigureAwait(false);
             return;
         }
@@ -150,11 +158,17 @@ public sealed class PlaybackInfoLoggingMiddleware
         }
     }
 
-    private void LogUnchangedRequest(Guid itemId, string? effectiveMediaSourceId)
+    private void LogUnchangedRequest(
+        Guid itemId,
+        string? effectiveMediaSourceId,
+        bool queryMediaSourceIdIsPresent,
+        string? bodyMediaSourceId)
     {
-        _logger.LogDebug(
-            "OptimalVersions observed PlaybackInfo for ItemId={ItemId}; EffectiveMediaSourceId={EffectiveMediaSourceId}; ImplicitDefault=false; request left unchanged",
+        _logger.LogInformation(
+            "OptimalVersions observed PlaybackInfo POST. ItemId={ItemId}; QueryMediaSourceIdPresent={QueryMediaSourceIdPresent}; BodyMediaSourceId={BodyMediaSourceId}; EffectiveMediaSourceId={EffectiveMediaSourceId}; ImplicitDefault=false; request left unchanged",
             itemId,
+            queryMediaSourceIdIsPresent,
+            bodyMediaSourceId,
             effectiveMediaSourceId);
     }
 
