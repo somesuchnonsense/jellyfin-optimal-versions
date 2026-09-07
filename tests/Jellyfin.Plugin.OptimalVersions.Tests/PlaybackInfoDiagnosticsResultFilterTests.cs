@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.MediaInfo;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -17,10 +18,10 @@ namespace Jellyfin.Plugin.OptimalVersions.Tests;
 public sealed class PlaybackInfoDiagnosticsResultFilterTests
 {
     [Fact]
-    public async Task OnResultExecutionAsync_LogsMarkedTypedResponseWithoutReordering()
+    public async Task OnResultExecutionAsync_RanksAndLogsMarkedTypedResponse()
     {
-        var first = new MediaSourceInfo { Id = "first" };
-        var second = new MediaSourceInfo { Id = "second" };
+        var first = CreateDirectPlaySource("first", 1920, 1080);
+        var second = CreateDirectPlaySource("second", 3840, 2160);
         var response = new PlaybackInfoResponse { MediaSources = [first, second] };
         var logger = new CollectingLogger<PlaybackInfoDiagnosticsResultFilter>();
         var filter = new PlaybackInfoDiagnosticsResultFilter(logger);
@@ -55,19 +56,25 @@ public sealed class PlaybackInfoDiagnosticsResultFilterTests
             });
 
         Assert.True(nextWasCalled);
-        Assert.Same(first, response.MediaSources[0]);
-        Assert.Same(second, response.MediaSources[1]);
+        Assert.Same(second, response.MediaSources[0]);
+        Assert.Same(first, response.MediaSources[1]);
         Assert.Contains(
             logger.Messages,
             message => message.Contains(
-                "Jellyfin returned 2 evaluated media sources",
+                "ranked 2 evaluated media sources",
                 StringComparison.Ordinal));
         Assert.Contains(
             logger.Messages,
-            message => message.Contains("source[0] Id=first", StringComparison.Ordinal));
+            message => message.Contains(
+                "Id=second; PlaybackCost=DirectPlay",
+                StringComparison.Ordinal)
+                && message.Contains("OriginalPosition=1; FinalPosition=0", StringComparison.Ordinal));
         Assert.Contains(
             logger.Messages,
-            message => message.Contains("source[1] Id=second", StringComparison.Ordinal));
+            message => message.Contains(
+                "Id=first; PlaybackCost=DirectPlay",
+                StringComparison.Ordinal)
+                && message.Contains("OriginalPosition=0; FinalPosition=1", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -75,7 +82,11 @@ public sealed class PlaybackInfoDiagnosticsResultFilterTests
     {
         var response = new PlaybackInfoResponse
         {
-            MediaSources = [new MediaSourceInfo { Id = "first" }]
+            MediaSources =
+            [
+                CreateDirectPlaySource("first", 1920, 1080),
+                CreateDirectPlaySource("second", 3840, 2160)
+            ]
         };
         var logger = new CollectingLogger<PlaybackInfoDiagnosticsResultFilter>();
         var filter = new PlaybackInfoDiagnosticsResultFilter(logger);
@@ -101,6 +112,28 @@ public sealed class PlaybackInfoDiagnosticsResultFilterTests
                 new object())));
 
         Assert.Empty(logger.Messages);
+        Assert.Equal("first", response.MediaSources[0].Id);
+        Assert.Equal("second", response.MediaSources[1].Id);
+    }
+
+    private static MediaSourceInfo CreateDirectPlaySource(string id, int width, int height)
+    {
+        return new MediaSourceInfo
+        {
+            Id = id,
+            SupportsDirectPlay = true,
+            SupportsDirectStream = true,
+            SupportsTranscoding = true,
+            MediaStreams =
+            [
+                new MediaStream
+                {
+                    Type = MediaStreamType.Video,
+                    Width = width,
+                    Height = height
+                }
+            ]
+        };
     }
 
     private sealed class CollectingLogger<T> : ILogger<T>

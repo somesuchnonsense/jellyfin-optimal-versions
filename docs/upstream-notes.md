@@ -189,9 +189,9 @@ This iteration implements only the experiment needed to prove that a plugin can 
 
 1. The startup-filter middleware marks only `POST Items/{itemId}/PlaybackInfo` requests whose effective source GUID equals the route item GUID. It implements the controller's query-over-body, null-based precedence, including the present-empty-query edge case.
 2. For a marked request, it removes the ID from both binding locations before MVC executes. It stores a correlation record in `HttpContext.Items` and leaves explicit non-default source selections untouched.
-3. A global `IAsyncResultFilter`, registered with `MvcOptions`, observes only marked typed `PlaybackInfoResponse` results. It does not buffer HTTP response bytes and does not mutate or reorder `MediaSources`.
-4. The filter logs original position, source ID, dimensions, video codec, bitrate, all three support flags, and the non-serialized `TranscodeReasons`. Playback and transcode URLs are never logged.
-5. Automated tests cover query-only and body-only IDs, query precedence, matching/nonmatching/blank IDs, preservation of nested body data, non-PlaybackInfo scoping, result-filter scoping, correlation, and unchanged source order.
+3. A global `IAsyncResultFilter`, registered with `MvcOptions`, observes only marked typed `PlaybackInfoResponse` results. It does not buffer HTTP response bytes. Starting in prototype 0.1.0.3, it replaces only `MediaSources` with a ranked array containing the same source objects.
+4. The filter logs source ID, playback-cost classification, dimensions, video codec, bitrate, all three support flags, non-serialized `TranscodeReasons`, and original/final positions. Playback and transcode URLs are never logged.
+5. Automated tests cover request rewriting/scoping, result-filter scoping, every mirrored RC7 reason-mask member, playback-cost ordering, quality tie-breaks, and stable original ordering.
 
 ### Live RC7/Moonfin validation
 
@@ -204,15 +204,31 @@ A live Moonfin playback against Jellyfin 12 RC7 on 2026-09-06 confirmed the comp
 - The original source remained first, confirming that unpinning alone does not change Jellyfin's preferred order.
 - Both HEVC 3840×1606 and H.264 1918×802 sources reported Direct Play, Direct Stream, and Transcoding support with `TranscodeReasons=None` (`0`). This is consistent with the RC7 finding that Direct Stream mirrors Direct Play in this path and that `SupportsTranscoding` represents availability rather than the chosen play method.
 
-This runtime evidence confirms the supported plugin registration and request/result interception architecture. It does not yet demonstrate a visible media-version switch because response ordering remains intentionally unchanged and both observed sources occupy the same Direct Play capability tier.
+This runtime evidence confirmed the supported plugin registration and request/result interception architecture before reordering was enabled. That diagnostic run did not demonstrate a visible media-version switch because both observed sources occupied the same Direct Play capability tier and the then-current filter preserved Jellyfin's order.
 
-## Proposed iteration after the live experiment
+## RC7 playback-cost classification and response ranking
 
-Only after the correlated live logs prove the experiment should the filter begin reordering. The intended next step is:
+The response sorter mirrors the decision boundary defined by pinned RC7 source rather than treating `SupportsDirectStream` as an independent tier:
 
-1. Rank sources as Direct Play first; then sources whose Jellyfin-produced `TranscodeReasons` contain only RC7's direct-stream-compatible reasons; then remaining transcodes. This consumes Jellyfin's decision rather than maintaining device/codec rules. Pin and unit-test the reason mask against RC7 because the upstream constant is internal.
-2. Within a class, rank by video pixel area (width × height), then video bitrate/source bitrate, then original index. Preserve all source objects and all non-source response fields unchanged.
-3. Log old/new positions and add tests for the RC7 reason mask, stable ranking, null metadata, malformed requests, non-success MVC results, and profile-less responses before broadening scope.
+- [`MediaBrowser.Model/Session/TranscodeReason.cs`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/MediaBrowser.Model/Session/TranscodeReason.cs) defines the exact `[Flags]` values.
+- [`MediaBrowser.Model/Dlna/StreamBuilder.cs`, alias masks](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/MediaBrowser.Model/Dlna/StreamBuilder.cs#L19-L27) defines `DirectStreamReasons` as all audio reasons plus `ContainerNotSupported` and `VideoCodecTagNotSupported`. These reasons can reject Direct Play while retaining the source video bitstream.
+- [`StreamBuilder.BuildVideoItem()`](https://github.com/jellyfin/jellyfin/blob/4910aafa1a8227a65a037d3d2d299a32691e4de3/MediaBrowser.Model/Dlna/StreamBuilder.cs#L646-L825) applies video-transcoding conditions when reasons include `VideoReasons` or `ContainerBitrateExceedsLimit`.
+
+The mirrored RC7 masks are:
+
+- Video-copy-compatible reasons: `ContainerNotSupported`, `VideoCodecTagNotSupported`, `AudioCodecNotSupported`, `AudioIsExternal`, `SecondaryAudioNotSupported`, `AudioChannelsNotSupported`, `AudioProfileNotSupported`, `AudioSampleRateNotSupported`, `AudioBitDepthNotSupported`, and `AudioBitrateNotSupported`.
+- Definite video-transcode reasons: `VideoCodecNotSupported`, `VideoProfileNotSupported`, `VideoRangeTypeNotSupported`, `VideoLevelNotSupported`, `VideoResolutionNotSupported`, `VideoBitDepthNotSupported`, `VideoFramerateNotSupported`, `VideoRotationNotSupported`, `RefFramesNotSupported`, `AnamorphicVideoNotSupported`, `InterlacedVideoNotSupported`, `VideoBitrateNotSupported`, and `ContainerBitrateExceedsLimit`.
+- Indeterminate reasons: `SubtitleCodecNotSupported`, `UnknownVideoStreamInfo`, `UnknownAudioStreamInfo`, `DirectPlayError`, and `StreamCountExceedsLimit`. A non-Direct-Play source with no reasons is also indeterminate. RC7 exposes why Direct Play failed, but not a typed per-stream copy/encode plan on `MediaSourceInfo`, so these cases cannot be classified reliably without parsing the token-bearing transcoding URL or duplicating later transcoder decisions.
+
+The explicit playback-cost order is:
+
+1. `DirectPlay`: `SupportsDirectPlay` is true.
+2. `VideoCopy`: Direct Play is false, transcoding is available, at least one reason exists, and every reason is in RC7's video-copy-compatible mask. This includes remux and audio-only transcode cases; RC7 does not expose enough typed information here to separate those two costs reliably.
+3. `VideoTranscode`: transcoding is available and at least one definite video-transcode reason exists.
+4. `Indeterminate`: transcoding is available, but the reason set does not establish whether video will be copied or encoded.
+5. `Unavailable`: neither Direct Play nor transcoding is available.
+
+Within one playback-cost category, sources sort by descending video pixel area, then descending video-stream bitrate (falling back to source bitrate), then original position. Missing or nonpositive quality values rank as zero. The result filter changes only `PlaybackInfoResponse.MediaSources` for requests carrying the middleware's successful-unpin correlation marker.
 
 ## Assumption status matrix
 
@@ -248,7 +264,8 @@ This review uses the upstream findings above as its premise; successful compilat
 - `PlaybackInfoStartupFilter` adds the request rewriter before calling the supplied `next` configurator, so it wraps Jellyfin's pipeline as documented.
 - `PlaybackInfoRequestClassifier` accepts the optional base-URL prefix, restricts observation to POST PlaybackInfo paths, parses the route item as a GUID, and compares source IDs as GUIDs. Its query-present/body-fallback model matches `GetPostedPlaybackInfo()`'s null-based precedence, including the empty-query edge case.
 - `PlaybackInfoLoggingMiddleware` uses `EnableBuffering()`, rewinds before MVC binding, and changes only the two source-ID locations for marked requests. It does not log the body, user ID, device profile, token, URL, or playback URL.
-- `PlaybackInfoDiagnosticsResultFilter` consumes the typed response before serialization, can observe `TranscodeReasons`, and logs the original list without changing it.
-- The prototype contains no configuration UI, raw response buffering, capability ranking, or response reordering.
+- `PlaybackInfoDiagnosticsResultFilter` consumes the typed response before serialization, can observe `TranscodeReasons`, and replaces only the marked response's `MediaSources` ordering.
+- `MediaSourceRanker` mirrors RC7's reason masks explicitly, classifies uncertain cases conservatively, and applies resolution, bitrate, and original-position tie-breaks.
+- The prototype contains no configuration UI, persistence, raw response buffering, or generalized policy options.
 
-No implementation depends on the disproven assumptions about automatic Jellyfin source ordering, `SupportsDirectStream`, response JSON visibility of `TranscodeReasons`, or plain-text response buffering. Real-server loading and a correlated Moonfin capture remain the acceptance test before response ordering is implemented.
+No implementation depends on the disproven assumptions about automatic Jellyfin source ordering, `SupportsDirectStream`, response JSON visibility of `TranscodeReasons`, or plain-text response buffering. A correlated Moonfin playback where source ordering changes is the remaining live acceptance test for client behavior.

@@ -25,7 +25,7 @@ public sealed class Plugin : BasePlugin<PluginConfiguration>
     public override string Name => "Optimal Versions";
 
     /// <inheritdoc />
-    public override string Description => "Unpins implicit PlaybackInfo requests and logs Jellyfin's evaluated media versions.";
+    public override string Description => "Unpins implicit PlaybackInfo requests and ranks Jellyfin's evaluated media versions.";
 
     /// <inheritdoc />
     public override Guid Id => Guid.Parse("89b9a8f7-17a2-442f-a0b5-23bc9de09637");

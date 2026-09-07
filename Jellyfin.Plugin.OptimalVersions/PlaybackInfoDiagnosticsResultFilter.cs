@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using MediaBrowser.Model.MediaInfo;
 using Microsoft.AspNetCore.Mvc;
@@ -8,7 +9,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.OptimalVersions;
 
 /// <summary>
-/// Logs Jellyfin's typed PlaybackInfo result for requests unpinned by the plugin.
+/// Ranks and logs Jellyfin's typed PlaybackInfo result for requests unpinned by the plugin.
 /// </summary>
 public sealed class PlaybackInfoDiagnosticsResultFilter : IAsyncResultFilter
 {
@@ -36,30 +37,35 @@ public sealed class PlaybackInfoDiagnosticsResultFilter : IAsyncResultFilter
             if (context.Result is ObjectResult { Value: PlaybackInfoResponse response })
             {
                 var mediaSources = response.MediaSources ?? Array.Empty<MediaBrowser.Model.Dto.MediaSourceInfo>();
+                var rankedSources = MediaSourceRanker.Rank(mediaSources);
+                response.MediaSources = rankedSources.Select(entry => entry.Source).ToArray();
                 _logger.LogInformation(
-                    "OptimalVersions {CorrelationId}: MVC result filter reached; Jellyfin returned {MediaSourceCount} evaluated media sources for ItemId={ItemId}; MultipleMediaSources={MultipleMediaSources}",
+                    "OptimalVersions {CorrelationId}: MVC result filter reached; ranked {MediaSourceCount} evaluated media sources for ItemId={ItemId}; MultipleMediaSources={MultipleMediaSources}",
                     correlation.CorrelationId,
-                    mediaSources.Count,
+                    rankedSources.Count,
                     correlation.ItemId,
-                    mediaSources.Count > 1);
+                    rankedSources.Count > 1);
 
-                for (var index = 0; index < mediaSources.Count; index++)
+                for (var finalPosition = 0; finalPosition < rankedSources.Count; finalPosition++)
                 {
-                    var mediaSource = mediaSources[index];
+                    var rankedSource = rankedSources[finalPosition];
+                    var mediaSource = rankedSource.Source;
                     var videoStream = mediaSource.VideoStream;
                     _logger.LogInformation(
-                        "OptimalVersions {CorrelationId}: source[{OriginalPosition}] Id={MediaSourceId}; Size={Width}x{Height}; VideoCodec={VideoCodec}; Bitrate={Bitrate}; DirectPlay={SupportsDirectPlay}; DirectStream={SupportsDirectStream}; Transcoding={SupportsTranscoding}; TranscodeReasons={TranscodeReasons}",
+                        "OptimalVersions {CorrelationId}: source Id={MediaSourceId}; PlaybackCost={PlaybackCost}; Size={Width}x{Height}; VideoCodec={VideoCodec}; Bitrate={Bitrate}; DirectPlay={SupportsDirectPlay}; DirectStream={SupportsDirectStream}; Transcoding={SupportsTranscoding}; TranscodeReasons={TranscodeReasons}; OriginalPosition={OriginalPosition}; FinalPosition={FinalPosition}",
                         correlation.CorrelationId,
-                        index,
                         mediaSource.Id,
+                        rankedSource.PlaybackCost,
                         videoStream?.Width,
                         videoStream?.Height,
                         videoStream?.Codec,
-                        mediaSource.Bitrate,
+                        rankedSource.Bitrate,
                         mediaSource.SupportsDirectPlay,
                         mediaSource.SupportsDirectStream,
                         mediaSource.SupportsTranscoding,
-                        mediaSource.TranscodeReasons);
+                        mediaSource.TranscodeReasons,
+                        rankedSource.OriginalPosition,
+                        finalPosition);
                 }
             }
             else
