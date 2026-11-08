@@ -1,14 +1,14 @@
 ---
 name: "Optimal Versions"
 guid: "89b9a8f7-17a2-442f-a0b5-23bc9de09637"
-version: "0.1.0.3"
+version: "0.1.0.4"
 targetAbi: "12.0.0.0"
 framework: "net10.0"
 overview: "Selects efficient media versions using Jellyfin's device-profile evaluation."
-description: "Prototype that unpins implicit PlaybackInfo selection and ranks evaluated media sources."
+description: "Diagnostic prototype that returns only the winning source for unpinned multi-source PlaybackInfo requests."
 category: "General"
 owner: "somesuchnonsense"
 artifacts:
 - "Jellyfin.Plugin.OptimalVersions.dll"
 changelog: >
-  Rank typed PlaybackInfo media sources using Jellyfin RC7 playback evaluation and stable quality tie-breakers.
+  Temporarily return only the highest-ranked source to test Moonfin source adoption.

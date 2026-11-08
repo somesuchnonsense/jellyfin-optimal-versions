@@ -269,3 +269,15 @@ This review uses the upstream findings above as its premise; successful compilat
 - The prototype contains no configuration UI, persistence, raw response buffering, or generalized policy options.
 
 No implementation depends on the disproven assumptions about automatic Jellyfin source ordering, `SupportsDirectStream`, response JSON visibility of `TranscodeReasons`, or plain-text response buffering. A correlated Moonfin playback where source ordering changes is the remaining live acceptance test for client behavior.
+
+## Temporary winner-only Moonfin experiment
+
+A subsequent live Moonfin test confirmed that the ranking itself selected the expected source but that response ordering alone did not change Moonfin playback choice:
+
+- the 1080p H.264 source ranked first as `DirectPlay`;
+- the 4K HEVC source ranked second as `VideoTranscode`;
+- Moonfin nevertheless played the originally selected 4K source.
+
+Prototype 0.1.0.4 therefore narrows the already marked, successfully unpinned response only when Jellyfin evaluated more than one media source. After applying the existing ranking unchanged, the MVC result filter replaces `PlaybackInfoResponse.MediaSources` with a one-element array containing the winning source object. It does not mutate any other response field. Marked responses with zero or one source remain unchanged, and requests without the successful-unpin correlation marker (including explicit/non-default selections) remain untouched.
+
+This is explicitly a temporary client-behavior probe, not the final architecture or selection policy. Its sole purpose is to determine whether Moonfin adopts the only source returned by PlaybackInfo when its originally selected source is absent. The experiment logs the original requested source ID, winning source ID, evaluated-source count, and returned-source count so a live request can be correlated without logging tokens or playback URLs.

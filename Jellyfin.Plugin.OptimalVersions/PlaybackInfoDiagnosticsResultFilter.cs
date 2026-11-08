@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Threading.Tasks;
 using MediaBrowser.Model.MediaInfo;
 using Microsoft.AspNetCore.Mvc;
@@ -38,13 +37,23 @@ public sealed class PlaybackInfoDiagnosticsResultFilter : IAsyncResultFilter
             {
                 var mediaSources = response.MediaSources ?? Array.Empty<MediaBrowser.Model.Dto.MediaSourceInfo>();
                 var rankedSources = MediaSourceRanker.Rank(mediaSources);
-                response.MediaSources = rankedSources.Select(entry => entry.Source).ToArray();
+                var winningMediaSource = rankedSources.Count > 0
+                    ? rankedSources[0].Source
+                    : null;
+
+                if (rankedSources.Count > 1)
+                {
+                    response.MediaSources = [winningMediaSource!];
+                }
+
+                var returnedMediaSourceCount = response.MediaSources?.Count ?? 0;
                 _logger.LogInformation(
-                    "OptimalVersions {CorrelationId}: MVC result filter reached; ranked {MediaSourceCount} evaluated media sources for ItemId={ItemId}; MultipleMediaSources={MultipleMediaSources}",
+                    "OptimalVersions {CorrelationId}: temporary winner-only Moonfin experiment; OriginalRequestedMediaSourceId={OriginalRequestedMediaSourceId}; WinningMediaSourceId={WinningMediaSourceId}; EvaluatedMediaSourceCount={EvaluatedMediaSourceCount}; ReturnedMediaSourceCount={ReturnedMediaSourceCount}",
                     correlation.CorrelationId,
+                    correlation.EffectiveMediaSourceId,
+                    winningMediaSource?.Id,
                     rankedSources.Count,
-                    correlation.ItemId,
-                    rankedSources.Count > 1);
+                    returnedMediaSourceCount);
 
                 for (var finalPosition = 0; finalPosition < rankedSources.Count; finalPosition++)
                 {

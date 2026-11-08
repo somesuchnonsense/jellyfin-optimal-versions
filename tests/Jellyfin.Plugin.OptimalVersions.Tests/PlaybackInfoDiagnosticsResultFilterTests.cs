@@ -18,7 +18,7 @@ namespace Jellyfin.Plugin.OptimalVersions.Tests;
 public sealed class PlaybackInfoDiagnosticsResultFilterTests
 {
     [Fact]
-    public async Task OnResultExecutionAsync_RanksAndLogsMarkedTypedResponse()
+    public async Task OnResultExecutionAsync_ImplicitRequestWithMultipleSourcesReturnsOnlyWinner()
     {
         var first = CreateDirectPlaySource("first", 1920, 1080);
         var second = CreateDirectPlaySource("second", 3840, 2160);
@@ -56,13 +56,16 @@ public sealed class PlaybackInfoDiagnosticsResultFilterTests
             });
 
         Assert.True(nextWasCalled);
+        Assert.Single(response.MediaSources);
         Assert.Same(second, response.MediaSources[0]);
-        Assert.Same(first, response.MediaSources[1]);
         Assert.Contains(
             logger.Messages,
             message => message.Contains(
-                "ranked 2 evaluated media sources",
-                StringComparison.Ordinal));
+                "OriginalRequestedMediaSourceId=fb5893bacabafc2854c3bed2b2283442",
+                StringComparison.Ordinal)
+                && message.Contains("WinningMediaSourceId=second", StringComparison.Ordinal)
+                && message.Contains("EvaluatedMediaSourceCount=2", StringComparison.Ordinal)
+                && message.Contains("ReturnedMediaSourceCount=1", StringComparison.Ordinal));
         Assert.Contains(
             logger.Messages,
             message => message.Contains(
@@ -78,7 +81,49 @@ public sealed class PlaybackInfoDiagnosticsResultFilterTests
     }
 
     [Fact]
-    public async Task OnResultExecutionAsync_IgnoresUnmarkedResponse()
+    public async Task OnResultExecutionAsync_ImplicitRequestWithOneSourceIsUnchanged()
+    {
+        var onlySource = CreateDirectPlaySource("only", 1920, 1080);
+        var originalSources = new[] { onlySource };
+        var response = new PlaybackInfoResponse { MediaSources = originalSources };
+        var logger = new CollectingLogger<PlaybackInfoDiagnosticsResultFilter>();
+        var filter = new PlaybackInfoDiagnosticsResultFilter(logger);
+        var httpContext = new DefaultHttpContext();
+        httpContext.Items[PlaybackInfoDiagnostics.ContextItemKey] = new PlaybackInfoRequestCorrelation(
+            "test-correlation",
+            Guid.Parse("fb5893ba-caba-fc28-54c3-bed2b2283442"),
+            "fb5893bacabafc2854c3bed2b2283442");
+        var actionContext = new ActionContext(
+            httpContext,
+            new RouteData(),
+            new ActionDescriptor(),
+            new ModelStateDictionary());
+        var result = new ObjectResult(response);
+        var executingContext = new ResultExecutingContext(
+            actionContext,
+            [],
+            result,
+            new object());
+
+        await filter.OnResultExecutionAsync(
+            executingContext,
+            () => Task.FromResult(new ResultExecutedContext(
+                actionContext,
+                [],
+                result,
+                new object())));
+
+        Assert.Same(originalSources, response.MediaSources);
+        Assert.Same(onlySource, response.MediaSources[0]);
+        Assert.Contains(
+            logger.Messages,
+            message => message.Contains("WinningMediaSourceId=only", StringComparison.Ordinal)
+                && message.Contains("EvaluatedMediaSourceCount=1", StringComparison.Ordinal)
+                && message.Contains("ReturnedMediaSourceCount=1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task OnResultExecutionAsync_ExplicitMediaSourceSelectionIsUnchanged()
     {
         var response = new PlaybackInfoResponse
         {
